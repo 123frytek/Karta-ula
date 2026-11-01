@@ -34,12 +34,101 @@ class MainActivity : Activity() {
             text = "Dodaj ul"
             setOnClickListener { edit(-1) }
         })
+        list.addView(Button(this).apply {
+            text = "Eksportuj kopię zapasową"
+            setOnClickListener { exportBackup() }
+        })
+        list.addView(Button(this).apply {
+            text = "Przywróć kopię zapasową"
+            setOnClickListener { importBackup() }
+        })
         for (i in 0 until records.length()) {
             val hive = records.getJSONObject(i)
             list.addView(Button(this).apply {
                 text = "Ul " + hive.optString("number") + " | Matka: " + hive.optString("queenYear")
                 setOnClickListener { edit(i) }
             })
+        }
+    }
+
+    private fun exportBackup() {
+        startActivityForResult(android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(android.content.Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(android.content.Intent.EXTRA_TITLE, "karta-ula-kopia.json")
+        }, 100)
+    }
+
+    private fun importBackup() {
+        startActivityForResult(android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(android.content.Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+        }, 101)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        try {
+            if (requestCode == 100) {
+                val backup = JSONObject().put("format", "karta-ula").put("version", 1).put("hives", records)
+                val stream = contentResolver.openOutputStream(uri, "wt")
+                    ?: throw IllegalStateException("Nie można otworzyć pliku")
+                stream.bufferedWriter(Charsets.UTF_8).use { it.write(backup.toString(2)) }
+                Toast.makeText(this, "Zapisano kopię zapasową", Toast.LENGTH_LONG).show()
+            } else if (requestCode == 101) {
+                val stream = contentResolver.openInputStream(uri)
+                    ?: throw IllegalStateException("Nie można otworzyć kopii")
+                val bytes = stream.use {
+                    val out = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        val n = it.read(buffer)
+                        if (n < 0) break
+                        if (out.size() + n > 2_000_000) throw IllegalArgumentException("Kopia jest zbyt duża")
+                        out.write(buffer, 0, n)
+                    }
+                    out.toByteArray()
+                }
+                val backup = JSONObject(String(bytes, Charsets.UTF_8))
+                require(backup.getString("format") == "karta-ula" && backup.getInt("version") == 1) {
+                    "Nieobsługiwany format kopii"
+                }
+                val imported = backup.getJSONArray("hives")
+                val numbers = mutableSetOf<String>()
+                val ids = mutableSetOf<String>()
+                val keys = listOf("number", "queenYear", "queenMark", "queenOrigin", "introduced",
+                    "inspection", "notes", "harvest", "feeding", "treatments", "todo", "id")
+                for (i in 0 until imported.length()) {
+                    val hive = imported.getJSONObject(i)
+                    keys.forEach { key ->
+                        require(hive.has(key) && hive.get(key) is String) { "Nieprawidłowe pole: " + key }
+                    }
+                    require(hive.getString("number").isNotBlank() && numbers.add(hive.getString("number"))) {
+                        "Pusty lub powtórzony numer ula"
+                    }
+                    require(hive.getString("id").isNotBlank() && ids.add(hive.getString("id"))) {
+                        "Pusty lub powtórzony identyfikator"
+                    }
+                }
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Przywrócić kopię?")
+                    .setMessage("Ta operacja zastąpi wszystkie dane w aplikacji. Liczba uli w kopii: " + imported.length() +
+                        ". Przed zastąpieniem wykonaj eksport obecnych danych.")
+                    .setNegativeButton("Anuluj", null)
+                    .setPositiveButton("Zastąp dane") { _, _ ->
+                        if (store.edit().putString("ule", imported.toString()).commit()) {
+                            records = imported
+                            home()
+                            Toast.makeText(this, "Przywrócono kopię", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(this, "Błąd zapisu. Dane nie zostały zastąpione.", Toast.LENGTH_LONG).show()
+                        }
+                    }.show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Błąd kopii: " + (e.message ?: "Nieznany błąd"), Toast.LENGTH_LONG).show()
         }
     }
 
