@@ -17,13 +17,81 @@ class MainActivity : Activity() {
         home()
     }
 
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    private fun background(color: Int, border: Int? = null): android.graphics.drawable.GradientDrawable {
+        return android.graphics.drawable.GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(12).toFloat()
+            if (border != null) setStroke(dp(1), border)
+        }
+    }
+
+    private fun style(view: android.view.View) {
+        val ink = android.graphics.Color.rgb(24, 48, 39)
+        val green = android.graphics.Color.rgb(35, 70, 56)
+        val gold = android.graphics.Color.rgb(255, 200, 87)
+        val white = android.graphics.Color.WHITE
+        val params = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(12) }
+        view.layoutParams = params
+        when (view) {
+            is Button -> {
+                view.isAllCaps = false
+                view.textSize = 18f
+                view.typeface = android.graphics.Typeface.create("sans-serif-medium", 0)
+                view.minHeight = dp(60)
+                view.setPadding(dp(16), dp(14), dp(16), dp(14))
+                view.backgroundTintList = null
+                val primary = view.text.toString() in listOf("Dodaj ul", "Zapisz w telefonie")
+                val hive = view.text.toString().startsWith("Ul ")
+                view.setTextColor(if (primary) white else ink)
+                view.background = background(if (primary) green else if (hive) gold else white, green)
+                if (hive) {
+                    view.gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
+                    view.textSize = 22f
+                }
+            }
+            is EditText -> {
+                view.textSize = 20f
+                view.setTextColor(ink)
+                view.setHintTextColor(android.graphics.Color.DKGRAY)
+                view.minHeight = dp(56)
+                view.setPadding(dp(14), dp(12), dp(14), dp(12))
+                view.backgroundTintList = null
+                view.background = background(white, green)
+            }
+            is TextView -> {
+                view.setTextColor(ink)
+                view.textSize = 17f
+                view.typeface = android.graphics.Typeface.create("sans-serif-medium", 0)
+                view.setPadding(0, dp(6), 0, dp(4))
+            }
+        }
+    }
+
     private fun layout(title: String): LinearLayout {
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(24, 24, 24, 24)
+            setPadding(dp(20), dp(20), dp(20), dp(32))
+            setOnHierarchyChangeListener(object : android.view.ViewGroup.OnHierarchyChangeListener {
+                override fun onChildViewAdded(parent: android.view.View?, child: android.view.View?) {
+                    if (child != null) style(child)
+                }
+                override fun onChildViewRemoved(parent: android.view.View?, child: android.view.View?) {}
+            })
         }
-        body.addView(TextView(this).apply { text = title; textSize = 26f })
-        setContentView(ScrollView(this).apply { addView(body) })
+        val heading = TextView(this).apply { text = title }
+        body.addView(heading)
+        heading.textSize = 32f
+        heading.setTypeface(android.graphics.Typeface.create("sans-serif", 0), android.graphics.Typeface.BOLD)
+        setContentView(ScrollView(this).apply {
+            setBackgroundColor(android.graphics.Color.rgb(246, 247, 239))
+            addView(body)
+        })
+        window.statusBarColor = android.graphics.Color.rgb(35, 70, 56)
+        window.navigationBarColor = android.graphics.Color.rgb(35, 70, 56)
         return body
     }
 
@@ -45,7 +113,7 @@ class MainActivity : Activity() {
         for (i in 0 until records.length()) {
             val hive = records.getJSONObject(i)
             list.addView(Button(this).apply {
-                text = "Ul " + hive.optString("number") + " | Matka: " + hive.optString("queenYear")
+                text = "Ul " + hive.optString("number") + "\nRocznik matki: " + hive.optString("queenYear")
                 setOnClickListener { edit(i) }
             })
         }
