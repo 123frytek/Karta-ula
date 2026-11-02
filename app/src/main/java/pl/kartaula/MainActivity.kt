@@ -125,7 +125,7 @@ class MainActivity : Activity() {
 
     private fun home() {
         list = layout("Karta ula")
-        list.addView(TextView(this).apply { text = "Dane lokalne. Bluetooth nie jest jeszcze dostępny." })
+        list.addView(TextView(this).apply { text = "Dane zapisane w telefonie. Wysyłanie do karty przez Wi-Fi Pasieka." })
         list.addView(Button(this).apply {
             text = "Dodaj ul"
             setOnClickListener { edit(-1) }
@@ -136,6 +136,118 @@ class MainActivity : Activity() {
                 text = "Ul " + hive.optString("number") + "\nMatka: " + queenInfo(hive).let { (breed, year) -> listOf(breed, year).filter { it.isNotBlank() }.joinToString(" • ").ifBlank { "Brak danych" } }
                 setOnClickListener { edit(i) }
             })
+        }
+    }
+
+    private var wifiBusy = false
+
+    private fun wifiRequest(network: android.net.Network, path: String, payload: String? = null): JSONObject {
+        val connection = network.openConnection(java.net.URL("http://192.168.4.1" + path))
+            as java.net.HttpURLConnection
+        try {
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.instanceFollowRedirects = false
+            if (payload != null) {
+                connection.requestMethod = "POST"
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                val bytes = payload.toByteArray(Charsets.UTF_8)
+                require(bytes.size < 8192) { "Dane ula są zbyt duże dla karty" }
+                connection.setFixedLengthStreamingMode(bytes.size)
+                connection.outputStream.use { it.write(bytes) }
+            }
+            val code = connection.responseCode
+            require(code in 200..299) { "Karta zgłosiła błąd HTTP " + code }
+            val bytes = connection.inputStream.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(1024)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    require(out.size() + n <= 16384) { "Odpowiedź karty jest zbyt duża" }
+                    out.write(buffer, 0, n)
+                }
+                out.toByteArray()
+            }
+            return JSONObject(String(bytes, Charsets.UTF_8))
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun wifiWork(work: () -> Unit) {
+        if (wifiBusy) return
+        wifiBusy = true
+        Thread {
+            try {
+                work()
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        android.app.AlertDialog.Builder(this)
+                            .setTitle("Nie udało się połączyć")
+                            .setMessage((e.message ?: "Błąd sieci") +
+                                "\nPołącz telefon z Wi-Fi Pasieka i zaakceptuj brak internetu. Jeśli wysłanie przerwano, sprawdź zapis na karcie.")
+                            .setPositiveButton("OK", null).show()
+                    }
+                }
+            } finally {
+                runOnUiThread { wifiBusy = false }
+            }
+        }.start()
+    }
+
+    private fun sendHive(hive: JSONObject) {
+        val snapshot = JSONObject(hive.toString())
+        wifiWork {
+            val manager = getSystemService(CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val networks = manager.allNetworks.filter {
+                manager.getNetworkCapabilities(it)?.hasTransport(
+                    android.net.NetworkCapabilities.TRANSPORT_WIFI
+                ) == true
+            }
+            require(networks.size == 1) { "Brak jednoznacznego połączenia Wi-Fi. Połącz się z siecią Pasieka." }
+            val network = networks.single()
+            val info = wifiRequest(network, "/api/info")
+            require(info.optString("protocol") == "pasieka-v1") { "Nieobsługiwana karta" }
+            val cardId = info.getString("cardId")
+            require(cardId.matches(Regex("[0-9A-F]{12}"))) { "Nieprawidłowy identyfikator karty" }
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle("Wysłać zapisane dane?")
+                        .setMessage("Ul: " + snapshot.optString("number") +
+                            "\nKarta: " + cardId +
+                            "\nDane na tej karcie zostaną zastąpione. Niezapisane zmiany formularza nie są wysyłane.")
+                        .setNegativeButton("Anuluj", null)
+                        .setPositiveButton("Wyślij") { _, _ ->
+                            wifiWork {
+                                val check = wifiRequest(network, "/api/info")
+                                require(check.optString("cardId") == cardId &&
+                                    check.optString("protocol") == "pasieka-v1") { "Zmieniła się karta odbiorcy" }
+                                val payload = JSONObject().put("cardId", cardId).put("hive", snapshot)
+                                val answer = wifiRequest(network, "/api/hive", payload.toString())
+                                require(answer.optBoolean("saved")) { "Karta nie potwierdziła zapisu" }
+                                val stored = wifiRequest(network, "/api/hive")
+                                require(stored.optString("id") == snapshot.optString("id") &&
+                                    stored.optString("number") == snapshot.optString("number")) {
+                                    "Nie potwierdzono odczytu wysłanego ula"
+                                }
+                                runOnUiThread {
+                                    if (!isFinishing && !isDestroyed) {
+                                        android.app.AlertDialog.Builder(this)
+                                            .setTitle("Dane zapisane na karcie")
+                                            .setMessage("Ul " + snapshot.optString("number") +
+                                                "\nKarta: " + cardId +
+                                                "\nZapis i odczyt potwierdzone. E-papier nie jest jeszcze obsługiwany.")
+                                            .setPositiveButton("OK", null).show()
+                                    }
+                                }
+                            }
+                        }.show()
+                }
+            }
         }
     }
 
@@ -298,6 +410,15 @@ class MainActivity : Activity() {
                 }
             }
         })
+        if (index >= 0) {
+            body.addView(Button(this).apply {
+                text = "Wyślij zapisane dane na kartę Wi-Fi"
+                setOnClickListener { sendHive(records.getJSONObject(index)) }
+            })
+            body.addView(TextView(this).apply {
+                text = "Przed wysłaniem zapisz zmiany i otwórz ul ponownie. Telefon połącz z siecią Pasieka."
+            })
+        }
         body.addView(Button(this).apply { text = "Anuluj"; setOnClickListener { home() } })
     }
 }
