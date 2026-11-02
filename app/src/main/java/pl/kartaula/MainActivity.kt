@@ -82,8 +82,36 @@ class MainActivity : Activity() {
                 override fun onChildViewRemoved(parent: android.view.View?, child: android.view.View?) {}
             })
         }
-        val heading = TextView(this).apply { text = title }
-        body.addView(heading)
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        body.addView(header)
+        val heading = TextView(this).apply { text = title; setTextColor(android.graphics.Color.rgb(24, 48, 39)) }
+        header.addView(heading, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        if (title == "Karta ula") {
+            header.addView(Button(this).apply {
+                text = "⋮"
+                textSize = 30f
+                contentDescription = "Menu kopii zapasowej"
+                setTextColor(android.graphics.Color.rgb(24, 48, 39))
+                backgroundTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT)
+                setOnClickListener { anchor ->
+                    PopupMenu(this@MainActivity, anchor).apply {
+                        menu.add(0, 1, 0, "Eksportuj kopię zapasową")
+                        menu.add(0, 2, 1, "Przywróć kopię zapasową")
+                        setOnMenuItemClickListener { item ->
+                            when (item.itemId) {
+                                1 -> exportBackup()
+                                2 -> importBackup()
+                            }
+                            true
+                        }
+                        show()
+                    }
+                }
+            }, LinearLayout.LayoutParams(dp(56), dp(56)))
+        }
         heading.textSize = 32f
         heading.setTypeface(android.graphics.Typeface.create("sans-serif", 0), android.graphics.Typeface.BOLD)
         setContentView(ScrollView(this).apply {
@@ -102,21 +130,22 @@ class MainActivity : Activity() {
             text = "Dodaj ul"
             setOnClickListener { edit(-1) }
         })
-        list.addView(Button(this).apply {
-            text = "Eksportuj kopię zapasową"
-            setOnClickListener { exportBackup() }
-        })
-        list.addView(Button(this).apply {
-            text = "Przywróć kopię zapasową"
-            setOnClickListener { importBackup() }
-        })
         for (i in 0 until records.length()) {
             val hive = records.getJSONObject(i)
             list.addView(Button(this).apply {
-                text = "Ul " + hive.optString("number") + "\nRocznik matki: " + hive.optString("queenYear")
+                text = "Ul " + hive.optString("number") + "\nMatka: " + queenInfo(hive).let { (breed, year) -> listOf(breed, year).filter { it.isNotBlank() }.joinToString(" • ").ifBlank { "Brak danych" } }
                 setOnClickListener { edit(i) }
             })
         }
+    }
+
+    private fun queenInfo(hive: JSONObject): Pair<String, String> {
+        val legacy = hive.optString("queenYear").trim()
+        if (hive.has("queenBreed")) return Pair(hive.optString("queenBreed"), legacy)
+        val match = Regex("\\b(?:19|20)[0-9]{2}\\b").find(legacy)
+        val year = match?.value ?: ""
+        val breed = if (match != null) legacy.removeRange(match.range).trim() else legacy
+        return Pair(breed, year)
     }
 
     private fun exportBackup() {
@@ -206,7 +235,8 @@ class MainActivity : Activity() {
         val fields = linkedMapOf<String, EditText>()
         val labels = linkedMapOf(
             "number" to "Numer ula",
-            "queenYear" to "Rocznik matki",
+            "queenBreed" to "Rasa / linia matki",
+            "queenYear" to "Rocznik matki (np. 2025)",
             "queenMark" to "Oznaczenie matki",
             "queenOrigin" to "Pochodzenie matki",
             "introduced" to "Data poddania (RRRR-MM-DD)",
@@ -220,7 +250,16 @@ class MainActivity : Activity() {
         labels.forEach { (key, label) ->
             body.addView(TextView(this).apply { text = label })
             val input = EditText(this).apply {
-                setText(hive.optString(key))
+                val queen = queenInfo(hive)
+                setText(when (key) {
+                    "queenBreed" -> queen.first
+                    "queenYear" -> queen.second
+                    else -> hive.optString(key)
+                })
+                if (key == "queenYear") {
+                    inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                    filters = arrayOf(android.text.InputFilter.LengthFilter(4))
+                }
                 minHeight = 64
             }
             fields[key] = input
@@ -240,7 +279,13 @@ class MainActivity : Activity() {
                         return@setOnClickListener
                     }
                 }
+                val year = fields.getValue("queenYear").text.toString().trim()
+                if (year.isNotEmpty() && !Regex("(19|20)[0-9]{2}").matches(year)) {
+                    fields.getValue("queenYear").error = "Podaj czterocyfrowy rok, np. 2025, lub pozostaw puste"
+                    return@setOnClickListener
+                }
                 val updated = JSONObject(hive.toString())
+                if (!updated.has("queenBreed")) updated.put("queenLegacy", hive.optString("queenYear"))
                 fields.forEach { (key, input) -> updated.put(key, input.text.toString().trim()) }
                 if (!updated.has("id")) updated.put("id", java.util.UUID.randomUUID().toString())
                 val next = JSONArray(records.toString())
