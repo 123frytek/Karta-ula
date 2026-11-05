@@ -132,34 +132,17 @@ class MainActivity : Activity() {
         })
         for (i in 0 until records.length()) {
             val hive = records.getJSONObject(i)
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
-                background = background(android.graphics.Color.rgb(255, 200, 87),
-                    android.graphics.Color.rgb(35, 70, 56))
-                setPadding(dp(8), dp(8), dp(8), dp(8))
-            }
-            val hiveButton = Button(this).apply {
-                text = "Ul " + hive.optString("number") + "\nMatka: " + queenInfo(hive).let { (breed, year) -> listOf(breed, year).filter { it.isNotBlank() }.joinToString(" • ").ifBlank { "Brak danych" } }
+            val kg = hive.optDouble("weightKg", Double.NaN)
+            val weight = if (kg.isFinite() && kg >= 0.0)
+                String.format(java.util.Locale.getDefault(), "%.2f kg", kg) else "-- kg"
+            list.addView(Button(this).apply {
+                text = "Ul " + hive.optString("number") + "          Waga: " + weight +
+                    "\nMatka: " + queenInfo(hive).let { (breed, year) ->
+                        listOf(breed, year).filter { it.isNotBlank() }
+                            .joinToString(" • ").ifBlank { "Brak danych" }
+                    }
                 setOnClickListener { edit(i) }
-            }
-            style(hiveButton)
-            row.addView(hiveButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            row.addView(TextView(this).apply {
-                val kg = hive.optDouble("weightKg", Double.NaN)
-                val value = if (kg.isFinite() && kg >= 0.0)
-                    String.format(java.util.Locale.getDefault(), "%.2f kg", kg) else "-- kg"
-                text = "Waga\n" + value
-                textSize = 19f
-                gravity = android.view.Gravity.CENTER
-                setTextColor(android.graphics.Color.rgb(24, 48, 39))
-                background = background(android.graphics.Color.WHITE,
-                    android.graphics.Color.rgb(35, 70, 56))
-                setPadding(dp(12), dp(12), dp(12), dp(12))
-                contentDescription = "Waga ula " + hive.optString("number") + ": " + value
-                setOnClickListener { edit(i) }
-            }, LinearLayout.LayoutParams(dp(132), LinearLayout.LayoutParams.WRAP_CONTENT))
-            list.addView(row)
+            })
         }
     }
 
