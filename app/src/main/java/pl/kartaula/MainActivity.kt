@@ -133,17 +133,113 @@ class MainActivity : Activity() {
         for (i in 0 until records.length()) {
             val hive = records.getJSONObject(i)
             val kg = hive.optDouble("weightKg", Double.NaN)
-            val weight = if (kg.isFinite() && kg >= 0.0)
-                String.format(java.util.Locale.getDefault(), "%.2f kg", kg) else "-- kg"
-            list.addView(Button(this).apply {
-                text = "Ul " + hive.optString("number") + "          Waga: " + weight +
+            val base = hive.optDouble("tareKg", Double.NaN)
+            val weight = if (kg.isFinite() && base.isFinite())
+                String.format(java.util.Locale.getDefault(), "%+.2f kg", kg - base) else "-- kg"
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                background = background(android.graphics.Color.rgb(255, 200, 87),
+                    android.graphics.Color.rgb(35, 70, 56))
+                setPadding(dp(16), dp(14), dp(10), dp(14))
+                minimumHeight = dp(90)
+            }
+            row.addView(TextView(this).apply {
+                text = "Ul " + hive.optString("number") + "    Przyrost: " + weight +
                     "\nMatka: " + queenInfo(hive).let { (breed, year) ->
                         listOf(breed, year).filter { it.isNotBlank() }
                             .joinToString(" • ").ifBlank { "Brak danych" }
                     }
+                textSize = 22f
+                typeface = android.graphics.Typeface.create("sans-serif-medium", 0)
+                setTextColor(android.graphics.Color.rgb(24, 48, 39))
                 setOnClickListener { edit(i) }
-            })
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(Button(this).apply {
+                text = "T"
+                textSize = 24f
+                isAllCaps = false
+                minWidth = 0
+                minHeight = 0
+                minimumWidth = 0
+                minimumHeight = 0
+                setPadding(0, 0, 0, 0)
+                setTextColor(android.graphics.Color.WHITE)
+                backgroundTintList = null
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.OVAL
+                    setColor(android.graphics.Color.rgb(190, 35, 42))
+                }
+                contentDescription = "Taruj wagę ula " + hive.optString("number")
+                setOnClickListener { confirmTare(i) }
+            }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { leftMargin = dp(8) })
+            list.addView(row)
         }
+    }
+
+    private fun measurementDate(timestamp: Long): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+            .format(java.util.Date(timestamp))
+
+    private fun saveWeightRecord(index: Int, updated: JSONObject): Boolean {
+        val next = JSONArray(records.toString())
+        next.put(index, updated)
+        if (!store.edit().putString("ule", next.toString()).commit()) {
+            Toast.makeText(this, "Nie udało się zapisać danych wagi", Toast.LENGTH_LONG).show()
+            return false
+        }
+        records = next
+        return true
+    }
+
+    // Punkt wejścia dla zweryfikowanych odczytów z modułu komunikacji.
+    // Wywołanie wyłącznie w wątku interfejsu, po sprawdzeniu tożsamości ula.
+    private fun recordWeight(hiveId: String, kg: Double, measuredAt: Long, sampleId: String) {
+        require(kg.isFinite() && kg >= 0.0 && measuredAt > 0 && sampleId.isNotBlank())
+        val index = (0 until records.length()).firstOrNull {
+            records.getJSONObject(it).optString("id") == hiveId
+        } ?: throw IllegalArgumentException("Nieznany ul")
+        val updated = JSONObject(records.getJSONObject(index).toString())
+        val history = updated.optJSONArray("weightHistory") ?: JSONArray()
+        for (i in 0 until history.length()) {
+            if (history.getJSONObject(i).optString("sampleId") == sampleId) return
+        }
+        history.put(JSONObject().put("type", "measurement").put("sampleId", sampleId)
+            .put("measuredAt", measuredAt).put("receivedAt", System.currentTimeMillis())
+            .put("timezone", java.util.TimeZone.getDefault().id).put("kg", kg))
+        updated.put("weightHistory", history)
+        if (measuredAt >= updated.optLong("weightMeasuredAt", 0)) {
+            updated.put("weightKg", kg).put("weightMeasuredAt", measuredAt)
+        }
+        if (saveWeightRecord(index, updated)) home()
+    }
+
+    private fun confirmTare(index: Int) {
+        val hive = records.getJSONObject(index)
+        val kg = hive.optDouble("weightKg", Double.NaN)
+        val measuredAt = hive.optLong("weightMeasuredAt", 0)
+        if (!kg.isFinite() || kg < 0.0 || measuredAt <= 0) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Brak pomiaru do tarowania")
+                .setMessage("Tara wymaga odczytu z wagi tego ula. Nie ustawiono fikcyjnego zera. Odbiór pomiarów z ESP32 wymaga podłączenia.")
+                .setPositiveButton("OK", null).show()
+            return
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Tarować ul " + hive.optString("number") + "?")
+            .setMessage("Ustawić punkt odniesienia na podstawie odczytu z " +
+                measurementDate(measuredAt) + "? Sprawdź datę pomiaru. Historia nie zostanie usunięta.")
+            .setNegativeButton("Anuluj", null)
+            .setPositiveButton("Taruj") { _, _ ->
+                val updated = JSONObject(records.getJSONObject(index).toString())
+                val timestamp = System.currentTimeMillis()
+                val history = updated.optJSONArray("weightHistory") ?: JSONArray()
+                history.put(JSONObject().put("type", "tare").put("at", timestamp)
+                    .put("timezone", java.util.TimeZone.getDefault().id)
+                    .put("kg", kg).put("measurementAt", measuredAt))
+                updated.put("tareKg", kg).put("tareAt", timestamp).put("weightHistory", history)
+                if (saveWeightRecord(index, updated)) home()
+            }.show()
     }
 
     private var wifiBusy = false
